@@ -4,7 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PNG → SVG 转换器 (Potrace 矢量追踪)</title>
-    <script src="https://cdn.jsdelivr.net/npm/potrace@2.1.0/dist/potrace.min.js"></script>
+    <!-- 更换为更稳定的 CDN：unpkg + 备用 jsdelivr -->
+    <script src="https://unpkg.com/potrace@2.1.0/dist/potrace.min.js"></script>
+    <script>
+        // 如果 unpkg 加载失败，立即同步加载 jsdelivr 备用源
+        if (typeof Potrace === 'undefined') {
+            document.write('<script src="https://cdn.jsdelivr.net/npm/potrace@2.1.0/dist/potrace.min.js"><\/script>');
+        }
+    </script>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -294,7 +301,6 @@
                     <div class="preview-placeholder">未选择图片</div>
                 </div>
             </div>
-            <!-- 保存原图按钮 -->
             <div style="margin-top: 0.75rem;">
                 <button class="btn" id="saveOriginalBtn" disabled style="width: 100%;">
                     💾 保存原始图片
@@ -346,7 +352,6 @@
         </div>
     </div>
 
-    <!-- 底部操作按钮 -->
     <div class="action-bar">
         <button class="btn btn-primary" id="convertBtn" disabled>
             ✨ 转换为 SVG
@@ -369,7 +374,7 @@
 
 <script>
     (function() {
-        // DOM 元素
+        // 获取 DOM 元素
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
         const previewContainer = document.getElementById('previewContainer');
@@ -388,13 +393,18 @@
         const statusMsg = document.getElementById('statusMsg');
         const resetBtn = document.getElementById('resetBtn');
 
-        // 状态
+        // 状态变量
         let currentImage = null;
-        let currentImageSrc = ''; // 原始图片的 DataURL / ObjectURL
+        let currentImageSrc = '';
         let currentFileName = '';
         let svgString = '';
 
-        // 滑块更新
+        // 检查 Potrace 是否加载成功
+        function isPotraceReady() {
+            return typeof Potrace !== 'undefined';
+        }
+
+        // 更新滑块显示
         function updateSliderLabels() {
             thresholdValue.textContent = thresholdSlider.value;
             turdValue.textContent = turdSlider.value;
@@ -437,20 +447,20 @@
         }
         resetBtn.addEventListener('click', resetAll);
 
-        // 文件处理
+        // 处理文件
         function handleFile(file) {
             if (!file.type.startsWith('image/')) {
                 setStatus('请选择图片文件', true);
                 return;
             }
-
+            if (!isPotraceReady()) {
+                setStatus('⚠️ Potrace 库未就绪，请刷新页面重试', true);
+                return;
+            }
             currentFileName = file.name || 'image';
-            
-            // 释放之前的 ObjectURL
             if (currentImageSrc && currentImageSrc.startsWith('blob:')) {
                 URL.revokeObjectURL(currentImageSrc);
             }
-
             const reader = new FileReader();
             reader.onload = (e) => {
                 const dataUrl = e.target.result;
@@ -458,18 +468,14 @@
                 const img = new Image();
                 img.onload = () => {
                     currentImage = img;
-                    // 预览
                     previewContainer.innerHTML = '';
                     const previewImg = document.createElement('img');
                     previewImg.src = dataUrl;
                     previewImg.className = 'preview-img';
                     previewImg.alt = '预览图';
                     previewContainer.appendChild(previewImg);
-                    
                     convertBtn.disabled = false;
                     saveOriginalBtn.disabled = false;
-                    
-                    // 清空旧结果
                     svgPreview.innerHTML = '<div class="preview-placeholder">SVG 预览将显示在这里</div>';
                     svgCode.textContent = '<svg> 等待转换... </svg>';
                     downloadSvgBtn.disabled = true;
@@ -492,16 +498,13 @@
             reader.readAsDataURL(file);
         }
 
-        // 上传事件
         uploadArea.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', (e) => {
             if (e.target.files.length) handleFile(e.target.files[0]);
         });
 
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(ev => {
-            uploadArea.addEventListener(ev, (e) => {
-                e.preventDefault(); e.stopPropagation();
-            });
+            uploadArea.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); });
         });
         uploadArea.addEventListener('dragenter', () => uploadArea.classList.add('drag-active'));
         uploadArea.addEventListener('dragover', () => uploadArea.classList.add('drag-active'));
@@ -534,10 +537,14 @@
             return newImageData;
         }
 
-        // 转换
+        // 转换主逻辑
         function convertToSvg() {
             if (!currentImage) {
                 setStatus('请先上传图片', true);
+                return;
+            }
+            if (!isPotraceReady()) {
+                setStatus('⚠️ Potrace 库未加载，请刷新页面或检查网络', true);
                 return;
             }
             setStatus('正在转换...', false);
@@ -547,23 +554,16 @@
                 try {
                     const width = currentImage.naturalWidth || currentImage.width;
                     const height = currentImage.naturalHeight || currentImage.height;
-                    
                     const srcCanvas = document.createElement('canvas');
                     srcCanvas.width = width;
                     srcCanvas.height = height;
                     const ctx = srcCanvas.getContext('2d', { willReadFrequently: true });
                     ctx.drawImage(currentImage, 0, 0);
                     const originalImageData = ctx.getImageData(0, 0, width, height);
-
                     const threshold = parseInt(thresholdSlider.value, 10);
                     const binaryImageData = binarizeImageData(originalImageData, threshold);
-
                     const turdSize = parseInt(turdSlider.value, 10);
                     const alphaMax = parseFloat(alphaSlider.value);
-
-                    if (typeof Potrace === 'undefined') {
-                        throw new Error('Potrace 库未加载，请刷新页面');
-                    }
 
                     const potrace = new Potrace();
                     potrace.setParameters({
@@ -579,12 +579,10 @@
                     if (!svg || svg.trim() === '') {
                         throw new Error('生成的 SVG 为空，请调整阈值参数');
                     }
-
                     svgString = svg;
                     svgPreview.innerHTML = svg;
                     const displayCode = svg.length > 300 ? svg.substring(0, 300) + '…' : svg;
                     svgCode.textContent = displayCode;
-
                     downloadSvgBtn.disabled = false;
                     saveSvgAsPngBtn.disabled = false;
                     setStatus('✅ 转换成功！可保存 SVG 或导出为 PNG。');
@@ -604,7 +602,7 @@
 
         convertBtn.addEventListener('click', convertToSvg);
 
-        // 保存原始图片
+        // 保存原图
         saveOriginalBtn.addEventListener('click', () => {
             if (!currentImageSrc) {
                 setStatus('没有可保存的图片', true);
@@ -612,7 +610,6 @@
             }
             const a = document.createElement('a');
             a.href = currentImageSrc;
-            // 保持原扩展名
             let ext = 'png';
             if (currentFileName) {
                 const match = currentFileName.match(/\.([^.]+)$/);
@@ -626,7 +623,7 @@
             setStatus('原始图片已保存');
         });
 
-        // 保存 SVG 文件
+        // 保存 SVG
         downloadSvgBtn.addEventListener('click', () => {
             if (!svgString) {
                 setStatus('没有可下载的 SVG', true);
@@ -646,17 +643,14 @@
             setStatus('SVG 文件已保存');
         });
 
-        // 保存 SVG 为 PNG 图片（将 SVG 渲染到 Canvas 再导出）
+        // 保存为 PNG
         saveSvgAsPngBtn.addEventListener('click', () => {
             if (!svgString) {
                 setStatus('没有可导出的 SVG', true);
                 return;
             }
             setStatus('正在导出 PNG...');
-
-            // 1. 从 svgString 中提取宽高，如果没有则使用原图尺寸
-            let svgWidth = 800;
-            let svgHeight = 600;
+            let svgWidth = 800, svgHeight = 600;
             try {
                 const parser = new DOMParser();
                 const svgDoc = parser.parseFromString(svgString, 'image/svg+xml');
@@ -664,11 +658,9 @@
                 const w = svgEl.getAttribute('width');
                 const h = svgEl.getAttribute('height');
                 if (w && h) {
-                    // 去除单位 px 等
                     svgWidth = parseFloat(w) || svgWidth;
                     svgHeight = parseFloat(h) || svgHeight;
                 } else {
-                    // 尝试从 viewBox 获取
                     const viewBox = svgEl.getAttribute('viewBox');
                     if (viewBox) {
                         const parts = viewBox.split(/[\s,]+/);
@@ -679,14 +671,11 @@
                     }
                 }
             } catch (e) {
-                // 解析失败就用原图尺寸
                 if (currentImage) {
                     svgWidth = currentImage.naturalWidth || currentImage.width || 800;
                     svgHeight = currentImage.naturalHeight || currentImage.height || 600;
                 }
             }
-
-            // 限制最大尺寸，避免内存问题
             const MAX_SIZE = 4096;
             if (svgWidth > MAX_SIZE || svgHeight > MAX_SIZE) {
                 const ratio = Math.min(MAX_SIZE / svgWidth, MAX_SIZE / svgHeight);
@@ -696,23 +685,17 @@
             if (svgWidth < 1) svgWidth = 800;
             if (svgHeight < 1) svgHeight = 600;
 
-            // 2. 创建 SVG Blob URL
             const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
             const svgUrl = URL.createObjectURL(svgBlob);
-
-            // 3. 用 Image 加载 SVG，再绘制到 Canvas
             const img = new Image();
             img.onload = () => {
                 const canvas = document.createElement('canvas');
                 canvas.width = svgWidth;
                 canvas.height = svgHeight;
                 const ctx = canvas.getContext('2d');
-                // 白色背景（SVG 本身透明，PNG 默认透明，但为了预览清晰，可给白色底）
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(0, 0, svgWidth, svgHeight);
                 ctx.drawImage(img, 0, 0, svgWidth, svgHeight);
-
-                // 4. 导出 PNG
                 canvas.toBlob((blob) => {
                     if (!blob) {
                         setStatus('导出 PNG 失败', true);
@@ -743,10 +726,13 @@
         // 初始化
         resetAll();
 
+        // 页面加载后再次检查 Potrace 状态
         window.addEventListener('load', () => {
-            if (typeof Potrace === 'undefined') {
-                setStatus('⚠️ Potrace 库加载失败，请刷新页面', true);
+            if (!isPotraceReady()) {
+                setStatus('⚠️ Potrace 库加载失败，请检查网络后刷新页面', true);
                 convertBtn.disabled = true;
+            } else {
+                setStatus('✅ 工具已就绪，请上传图片');
             }
         });
     })();
